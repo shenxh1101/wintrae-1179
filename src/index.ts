@@ -21,6 +21,7 @@ import {
   MakeupSignInResult,
   SignInStatus,
   PlaceOrderResult,
+  RefundOrderResult,
   CouponListResult,
   CouponWithExpireInfo,
   MemberEventQuery,
@@ -150,7 +151,7 @@ export class MemberGrowthSDK {
     return this.rewardManager.issueCoupon(memberId, templateId);
   }
 
-  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired'): Promise<Coupon[]> {
+  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired' | 'revoked'): Promise<Coupon[]> {
     return this.rewardManager.getCoupons(memberId, status);
   }
 
@@ -164,6 +165,10 @@ export class MemberGrowthSDK {
 
   useCoupon(couponId: string, orderId: string): Promise<boolean> {
     return this.rewardManager.useCoupon(couponId, orderId);
+  }
+
+  refundOrder(memberId: string, orderId: string, orderAmount: number): Promise<RefundOrderResult> {
+    return this.rewardManager.refundOrder(memberId, orderId, orderAmount);
   }
 
   getPointRecords(memberId: string, limit?: number): Promise<PointRecord[]> {
@@ -180,6 +185,10 @@ export class MemberGrowthSDK {
 
   getMemberEvents(memberId: string, query?: MemberEventQuery): Promise<MemberEventList> {
     return this.eventManager.getMemberEvents(memberId, query);
+  }
+
+  getEventsByBizId(bizId: string, query?: MemberEventQuery): Promise<MemberEventList> {
+    return this.eventManager.getEventsByBizId(bizId, query);
   }
 
   getLevels(): MemberLevel[] {

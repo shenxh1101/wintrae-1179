@@ -39,6 +39,7 @@ export class MemberManager {
       continuousSignInDays: 0,
       totalSignInDays: 0,
       signInCycle: 1,
+      makeupUsedCount: 0,
     };
 
     await this.storage.saveMember(account);

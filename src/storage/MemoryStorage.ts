@@ -6,6 +6,7 @@ import {
   Coupon,
   TaskRecord,
   OperationLog,
+  SignInDailyRecord,
   StorageAdapter,
 } from '../types';
 
@@ -18,6 +19,7 @@ export class MemoryStorage implements StorageAdapter {
   private memberCoupons: Map<string, string[]> = new Map();
   private taskRecords: Map<string, Map<string, TaskRecord>> = new Map();
   private operationLogs: OperationLog[] = [];
+  private signInDailyRecords: Map<string, SignInDailyRecord[]> = new Map();
 
   getMember(memberId: string): MemberAccount | null {
     return this.members.get(memberId) || null;
@@ -40,6 +42,14 @@ export class MemoryStorage implements StorageAdapter {
     this.pointRecords.get(record.memberId)!.push(record);
   }
 
+  getPointRecordsByBizId(bizId: string): PointRecord[] {
+    const all: PointRecord[] = [];
+    for (const records of this.pointRecords.values()) {
+      all.push(...records.filter(r => r.bizId === bizId));
+    }
+    return all.sort((a, b) => b.createTime - a.createTime);
+  }
+
   getGrowthRecords(memberId: string, limit?: number): GrowthRecord[] {
     const records = this.growthRecords.get(memberId) || [];
     const sorted = records.sort((a, b) => b.createTime - a.createTime);
@@ -51,6 +61,14 @@ export class MemoryStorage implements StorageAdapter {
       this.growthRecords.set(record.memberId, []);
     }
     this.growthRecords.get(record.memberId)!.push(record);
+  }
+
+  getGrowthRecordsByBizId(bizId: string): GrowthRecord[] {
+    const all: GrowthRecord[] = [];
+    for (const records of this.growthRecords.values()) {
+      all.push(...records.filter(r => r.bizId === bizId));
+    }
+    return all.sort((a, b) => b.createTime - a.createTime);
   }
 
   getLevelChangeRecords(memberId: string, limit?: number): LevelChangeRecord[] {
@@ -66,7 +84,7 @@ export class MemoryStorage implements StorageAdapter {
     this.levelChangeRecords.get(record.memberId)!.push(record);
   }
 
-  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired'): Coupon[] {
+  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired' | 'revoked'): Coupon[] {
     const couponIds = this.memberCoupons.get(memberId) || [];
     const coupons = couponIds.map(id => this.coupons.get(id)!).filter(Boolean);
     if (status) {
@@ -117,5 +135,24 @@ export class MemoryStorage implements StorageAdapter {
     }
     const sorted = logs.sort((a, b) => b.createTime - a.createTime);
     return limit ? sorted.slice(0, limit) : sorted;
+  }
+
+  addSignInDailyRecord(record: SignInDailyRecord): void {
+    if (!this.signInDailyRecords.has(record.memberId)) {
+      this.signInDailyRecords.set(record.memberId, []);
+    }
+    this.signInDailyRecords.get(record.memberId)!.push(record);
+  }
+
+  getSignInDailyRecords(memberId: string, startDate?: string, endDate?: string): SignInDailyRecord[] {
+    const records = this.signInDailyRecords.get(memberId) || [];
+    let filtered = records;
+    if (startDate) {
+      filtered = filtered.filter(r => r.date >= startDate);
+    }
+    if (endDate) {
+      filtered = filtered.filter(r => r.date <= endDate);
+    }
+    return filtered.sort((a, b) => a.date.localeCompare(b.date));
   }
 }

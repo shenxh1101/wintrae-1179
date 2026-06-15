@@ -111,7 +111,7 @@ export class GrowthManager {
       memberId,
       action: 'add_growth',
       module: 'growth',
-      detail: { growth, source, recordId, totalGrowth: account.totalGrowth },
+      detail: { growth, source, recordId, bizId: options.bizId, totalGrowth: account.totalGrowth },
     });
 
     return {

@@ -26,6 +26,7 @@ const EVENT_TITLE_MAP: Record<EventType, string> = {
   issue_coupon: '发放优惠券',
   use_coupon: '使用优惠券',
   place_order: '下单消费',
+  refund_order: '退款结算',
 };
 
 export class EventManager {
@@ -41,12 +42,15 @@ export class EventManager {
     const types = query.types;
     const startTime = query.startTime;
     const endTime = query.endTime;
+    const bizId = query.bizId;
 
     const allEvents: MemberEvent[] = [];
 
-    const rawLogs = (this.storage as any).getOperationLogs
-      ? await (this.storage as any).getOperationLogs(memberId)
-      : [];
+    let rawLogs: OperationLog[] = [];
+    if (this.storage.getOperationLogs) {
+      const result = this.storage.getOperationLogs(memberId);
+      rawLogs = result instanceof Promise ? await result : result;
+    }
 
     const pointResult = this.storage.getPointRecords(memberId);
     const growthResult = this.storage.getGrowthRecords(memberId);
@@ -63,14 +67,51 @@ export class EventManager {
       if (startTime && log.createTime < startTime) continue;
       if (endTime && log.createTime > endTime) continue;
 
-      const event = this.buildEventFromLog(
-        log,
-        eventType,
-        pointRecords,
-        growthRecords,
-        levelRecords
-      );
-      if (event) allEvents.push(event);
+      const event = this.buildEventFromLog(log, eventType, pointRecords, growthRecords, levelRecords);
+      if (!event) continue;
+
+      if (bizId) {
+        const eventBizId = event.bizId || log.detail?.orderId || log.detail?.bizId;
+        if (eventBizId !== bizId) continue;
+      }
+
+      allEvents.push(event);
+    }
+
+    allEvents.sort((a, b) => b.createTime - a.createTime);
+
+    const total = allEvents.length;
+    const startIndex = (page - 1) * pageSize;
+    const list = allEvents.slice(startIndex, startIndex + pageSize);
+    const hasMore = startIndex + pageSize < total;
+
+    return { list, total, page, pageSize, hasMore };
+  }
+
+  async getEventsByBizId(bizId: string, query: MemberEventQuery = {}): Promise<MemberEventList> {
+    const page = query.page || 1;
+    const pageSize = query.pageSize || 20;
+
+    let orderPointRecords: import('../types').PointRecord[] = [];
+    if (this.storage.getPointRecordsByBizId) {
+      const result = this.storage.getPointRecordsByBizId(bizId);
+      orderPointRecords = result instanceof Promise ? await result : result;
+    }
+
+    let orderGrowthRecords: import('../types').GrowthRecord[] = [];
+    if (this.storage.getGrowthRecordsByBizId) {
+      const result = this.storage.getGrowthRecordsByBizId(bizId);
+      orderGrowthRecords = result instanceof Promise ? await result : result;
+    }
+
+    const memberIds = new Set<string>();
+    for (const r of orderPointRecords) memberIds.add(r.memberId);
+    for (const r of orderGrowthRecords) memberIds.add(r.memberId);
+
+    const allEvents: MemberEvent[] = [];
+    for (const memberId of memberIds) {
+      const events = await this.getMemberEvents(memberId, { ...query, bizId });
+      allEvents.push(...events.list);
     }
 
     allEvents.sort((a, b) => b.createTime - a.createTime);
@@ -101,7 +142,7 @@ export class EventManager {
     let bizId: string | undefined;
 
     const detail = log.detail || {};
-    bizId = detail.bizId;
+    bizId = detail.bizId || detail.orderId;
 
     switch (type) {
       case 'register':
@@ -113,14 +154,17 @@ export class EventManager {
       case 'earn_points':
         pointsChange = detail.points || 0;
         description = `通过「${detail.source || '活动'}」获得 ${pointsChange} 积分`;
+        bizId = detail.bizId || bizId;
         break;
       case 'spend_points':
         pointsChange = -(detail.points || 0);
         description = `扣减 ${-pointsChange} 积分（${detail.source || '使用'}）`;
+        bizId = detail.bizId || bizId;
         break;
       case 'add_growth':
         growthChange = detail.growth || 0;
         description = `通过「${detail.source || '活动'}」获得 ${growthChange} 成长值`;
+        bizId = detail.bizId || bizId;
         break;
       case 'level_change':
         levelBefore = detail.fromLevel;
@@ -139,12 +183,13 @@ export class EventManager {
       case 'makeup_sign_in':
         pointsChange = detail.points || 0;
         growthChange = detail.growth || 0;
-        description = `补签 ${detail.makeupDate || ''}${pointsChange ? `，+${pointsChange}积分` : ''}${growthChange ? `，+${growthChange}成长值` : ''}`;
+        description = `补签 ${detail.makeupDate || ''}${pointsChange ? `，+${pointsChange}积分` : ''}${growthChange ? `，+${growthChange}成长值` : ''}${detail.makeupCost ? `，消耗${detail.makeupCost}积分` : ''}`;
         break;
       case 'complete_task':
         pointsChange = detail.points || 0;
         growthChange = detail.growth || 0;
         description = `完成任务「${detail.taskName || '未知任务'}」${pointsChange ? `，+${pointsChange}积分` : ''}${growthChange ? `，+${growthChange}成长值` : ''}`;
+        bizId = detail.taskId || bizId;
         break;
       case 'birthday_reward':
         pointsChange = detail.points || 0;
@@ -154,17 +199,29 @@ export class EventManager {
       case 'issue_coupon':
         couponId = detail.couponId;
         couponName = detail.couponName || '优惠券';
-        description = `获得优惠券「${couponName}」`;
+        description = `获得优惠券「${couponName}」${detail.source ? `（${detail.source}）` : ''}`;
         break;
       case 'use_coupon':
         couponId = detail.couponId;
         description = `使用优惠券（订单号：${detail.orderId || '-'}）`;
+        bizId = detail.orderId || bizId;
         break;
       case 'place_order':
         pointsChange = detail.pointsEarned || 0;
         growthChange = detail.growthEarned || 0;
-        bizId = detail.orderId;
+        bizId = detail.orderId || bizId;
         description = `下单消费 ¥${detail.orderAmount || 0}${pointsChange ? `，+${pointsChange}积分` : ''}${growthChange ? `，+${growthChange}成长值` : ''}${detail.levelChanged ? `，升级到Lv.${detail.newLevel}` : ''}`;
+        break;
+      case 'refund_order':
+        pointsChange = -(detail.pointsDeducted || 0);
+        growthChange = -(detail.growthDeducted || 0);
+        bizId = detail.orderId || bizId;
+        description = `退款 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}${detail.couponsRevoked?.length ? `，回收${detail.couplingsRevoked?.length || detail.couponsRevoked.length}张券` : ''}`;
+        if (detail.couponsRevoked?.length) {
+          description = `退款 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}，回收${detail.couponsRevoked.length}张券`;
+        }
+        levelBefore = detail.oldLevel;
+        levelAfter = detail.newLevel;
         break;
     }
 

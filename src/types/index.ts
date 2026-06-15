@@ -57,11 +57,13 @@ export interface Coupon {
   type: 'discount' | 'cash' | 'shipping';
   value: number;
   threshold?: number;
-  status: 'unused' | 'used' | 'expired';
+  status: 'unused' | 'used' | 'expired' | 'revoked';
   createTime: number;
   expireTime: number;
   useTime?: number;
   orderId?: string;
+  source?: string;
+  revokeReason?: string;
 }
 
 export interface CouponTemplate {
@@ -91,9 +93,29 @@ export interface SignInReward {
   couponTemplateId?: string;
 }
 
+export interface MakeupConfig {
+  maxMakeupCount: number;
+  makeupCostPoints?: number;
+  makeupWindowDays?: number;
+}
+
 export interface SignInConfig {
   cycleDays: number;
   rewards: SignInReward[];
+  makeupConfig?: MakeupConfig;
+}
+
+export interface SignInDailyRecord {
+  id: string;
+  memberId: string;
+  date: string;
+  type: 'normal' | 'makeup';
+  dayInCycle: number;
+  cycle: number;
+  points?: number;
+  growth?: number;
+  couponId?: string;
+  createTime: number;
 }
 
 export interface TaskConfig {
@@ -137,6 +159,7 @@ export interface MemberAccount {
   continuousSignInDays: number;
   totalSignInDays: number;
   signInCycle: number;
+  makeupUsedCount: number;
   lastBirthdayRewardYear?: number;
 }
 
@@ -172,13 +195,18 @@ export interface StorageAdapter {
   addGrowthRecord(record: GrowthRecord): Promise<void> | void;
   getLevelChangeRecords(memberId: string, limit?: number): Promise<LevelChangeRecord[]> | LevelChangeRecord[];
   addLevelChangeRecord(record: LevelChangeRecord): Promise<void> | void;
-  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired'): Promise<Coupon[]> | Coupon[];
+  getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired' | 'revoked'): Promise<Coupon[]> | Coupon[];
   getCouponById?(couponId: string): Promise<Coupon | null> | Coupon | null;
   addCoupon(coupon: Coupon): Promise<void> | void;
   updateCoupon(couponId: string, updates: Partial<Coupon>): Promise<void> | void;
   getTaskRecord(memberId: string, taskId: string): Promise<TaskRecord | null> | TaskRecord | null;
   saveTaskRecord(record: TaskRecord): Promise<void> | void;
   addOperationLog(log: OperationLog): Promise<void> | void;
+  getOperationLogs?(memberId?: string, limit?: number): Promise<OperationLog[]> | OperationLog[];
+  addSignInDailyRecord?(record: SignInDailyRecord): Promise<void> | void;
+  getSignInDailyRecords?(memberId: string, startDate?: string, endDate?: string): Promise<SignInDailyRecord[]> | SignInDailyRecord[];
+  getPointRecordsByBizId?(bizId: string): Promise<PointRecord[]> | PointRecord[];
+  getGrowthRecordsByBizId?(bizId: string): Promise<GrowthRecord[]> | GrowthRecord[];
 }
 
 export interface EarnPointsResult {
@@ -226,12 +254,14 @@ export interface SignInResult {
 
 export interface MakeupSignInResult extends SignInResult {
   makeupDate: string;
+  makeupCost?: number;
+  makeupRemaining?: number;
 }
 
 export interface SignInCalendarItem {
   date: string;
   signedIn: boolean;
-  isMakeup: boolean;
+  type: 'normal' | 'makeup' | 'none';
   dayInCycle: number;
   reward?: SignInReward;
   canMakeup: boolean;
@@ -249,6 +279,11 @@ export interface SignInStatus {
   currentRewards: SignInReward[];
   totalRewards: SignInReward[];
   expiringCoupons?: CouponWithExpireInfo[];
+  makeupUsedCount: number;
+  makeupMaxCount: number;
+  makeupRemaining: number;
+  makeupCostPoints: number;
+  makeupWindowDays: number;
 }
 
 export interface PlaceOrderResult {
@@ -272,16 +307,38 @@ export interface PlaceOrderResult {
   memberInfo: MemberInfoResult | null;
 }
 
+export interface RefundOrderResult {
+  success: boolean;
+  orderId: string;
+  orderAmount: number;
+  pointsDeducted: number;
+  growthDeducted: number;
+  totalPoints: number;
+  totalGrowth: number;
+  levelChanged: boolean;
+  oldLevel?: number;
+  newLevel?: number;
+  currentLevel: number;
+  currentLevelName: string;
+  couponsRevoked: Coupon[];
+  couponsRevokedCount: number;
+  benefits: BenefitPackage[];
+  privileges: string[];
+  memberInfo: MemberInfoResult | null;
+}
+
 export interface CouponListResult {
   unused: CouponWithExpireInfo[];
   used: CouponWithExpireInfo[];
   expired: CouponWithExpireInfo[];
+  revoked: CouponWithExpireInfo[];
   total: number;
   expiring: CouponWithExpireInfo[];
   expiringCount: number;
   unusedCount: number;
   usedCount: number;
   expiredCount: number;
+  revokedCount: number;
 }
 
 export type EventType =
@@ -297,7 +354,8 @@ export type EventType =
   | 'birthday_reward'
   | 'issue_coupon'
   | 'use_coupon'
-  | 'place_order';
+  | 'place_order'
+  | 'refund_order';
 
 export interface MemberEvent {
   id: string;
@@ -323,6 +381,7 @@ export interface MemberEventQuery {
   endTime?: number;
   page?: number;
   pageSize?: number;
+  bizId?: string;
 }
 
 export interface MemberEventList {

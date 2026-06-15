@@ -71,7 +71,7 @@ export class PointManager {
       memberId,
       action: 'earn_points',
       module: 'points',
-      detail: { points, source, recordId, totalPoints: account.points },
+      detail: { points, source, recordId, bizId: options.bizId, totalPoints: account.points },
     });
 
     let levelChanged = false;
@@ -140,7 +140,7 @@ export class PointManager {
       memberId,
       action: 'spend_points',
       module: 'points',
-      detail: { points, source, recordId, remainingPoints: account.points },
+      detail: { points, source, recordId, bizId: options.bizId, remainingPoints: account.points },
     });
 
     return {
