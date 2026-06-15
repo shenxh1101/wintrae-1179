@@ -75,6 +75,10 @@ export class MemoryStorage implements StorageAdapter {
     return coupons;
   }
 
+  getCouponById(couponId: string): Coupon | null {
+    return this.coupons.get(couponId) || null;
+  }
+
   addCoupon(coupon: Coupon): void {
     this.coupons.set(coupon.id, coupon);
     if (!this.memberCoupons.has(coupon.memberId)) {

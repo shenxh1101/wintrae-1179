@@ -136,7 +136,13 @@ export interface MemberAccount {
   lastSignInDate?: string;
   continuousSignInDays: number;
   totalSignInDays: number;
+  signInCycle: number;
   lastBirthdayRewardYear?: number;
+}
+
+export interface CouponWithExpireInfo extends Coupon {
+  isExpiring: boolean;
+  daysLeft: number;
 }
 
 export interface SDKConfig {
@@ -167,6 +173,7 @@ export interface StorageAdapter {
   getLevelChangeRecords(memberId: string, limit?: number): Promise<LevelChangeRecord[]> | LevelChangeRecord[];
   addLevelChangeRecord(record: LevelChangeRecord): Promise<void> | void;
   getCoupons(memberId: string, status?: 'unused' | 'used' | 'expired'): Promise<Coupon[]> | Coupon[];
+  getCouponById?(couponId: string): Promise<Coupon | null> | Coupon | null;
   addCoupon(coupon: Coupon): Promise<void> | void;
   updateCoupon(couponId: string, updates: Partial<Coupon>): Promise<void> | void;
   getTaskRecord(memberId: string, taskId: string): Promise<TaskRecord | null> | TaskRecord | null;
@@ -205,12 +212,125 @@ export interface AddGrowthResult {
 export interface SignInResult {
   success: boolean;
   day: number;
+  cycle: number;
   isContinuous: boolean;
+  isCycleComplete: boolean;
+  isMakeup: boolean;
   points?: number;
   growth?: number;
   coupon?: Coupon;
   totalPoints: number;
   currentLevel: number;
+  memberInfo?: MemberInfoResult | null;
+}
+
+export interface MakeupSignInResult extends SignInResult {
+  makeupDate: string;
+}
+
+export interface SignInCalendarItem {
+  date: string;
+  signedIn: boolean;
+  isMakeup: boolean;
+  dayInCycle: number;
+  reward?: SignInReward;
+  canMakeup: boolean;
+}
+
+export interface SignInStatus {
+  todaySignedIn: boolean;
+  continuousSignInDays: number;
+  totalSignInDays: number;
+  currentCycle: number;
+  currentDay: number;
+  cycleDays: number;
+  cycleProgress: string;
+  calendar: SignInCalendarItem[];
+  currentRewards: SignInReward[];
+  totalRewards: SignInReward[];
+  expiringCoupons?: CouponWithExpireInfo[];
+}
+
+export interface PlaceOrderResult {
+  success: boolean;
+  orderId: string;
+  orderAmount: number;
+  pointsEarned: number;
+  pointsRate: number;
+  growthEarned: number;
+  growthRate: number;
+  totalPoints: number;
+  totalGrowth: number;
+  currentLevel: number;
+  currentLevelName: string;
+  levelChanged: boolean;
+  oldLevel?: number;
+  newLevel?: number;
+  levelUpRewards: Coupon[];
+  benefits: BenefitPackage[];
+  privileges: string[];
+  memberInfo: MemberInfoResult | null;
+}
+
+export interface CouponListResult {
+  unused: CouponWithExpireInfo[];
+  used: CouponWithExpireInfo[];
+  expired: CouponWithExpireInfo[];
+  total: number;
+  expiring: CouponWithExpireInfo[];
+  expiringCount: number;
+  unusedCount: number;
+  usedCount: number;
+  expiredCount: number;
+}
+
+export type EventType =
+  | 'register'
+  | 'update_profile'
+  | 'earn_points'
+  | 'spend_points'
+  | 'add_growth'
+  | 'level_change'
+  | 'sign_in'
+  | 'makeup_sign_in'
+  | 'complete_task'
+  | 'birthday_reward'
+  | 'issue_coupon'
+  | 'use_coupon'
+  | 'place_order';
+
+export interface MemberEvent {
+  id: string;
+  memberId: string;
+  type: EventType;
+  title: string;
+  description: string;
+  pointsChange: number;
+  growthChange: number;
+  levelBefore?: number;
+  levelAfter?: number;
+  couponId?: string;
+  couponName?: string;
+  bizId?: string;
+  detail: any;
+  createTime: number;
+  createTimeFormatted: string;
+}
+
+export interface MemberEventQuery {
+  types?: EventType[];
+  startTime?: number;
+  endTime?: number;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface MemberEventList {
+  list: MemberEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
 }
 
 export interface CompleteTaskResult {

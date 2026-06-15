@@ -18,6 +18,13 @@ import {
   MemberLevel,
   BenefitPackage,
   StorageAdapter,
+  MakeupSignInResult,
+  SignInStatus,
+  PlaceOrderResult,
+  CouponListResult,
+  CouponWithExpireInfo,
+  MemberEventQuery,
+  MemberEventList,
 } from './types';
 import { ConfigManager } from './config/ConfigManager';
 import { MemoryStorage } from './storage/MemoryStorage';
@@ -26,6 +33,7 @@ import { PointManager } from './modules/PointManager';
 import { GrowthManager } from './modules/GrowthManager';
 import { RewardManager } from './modules/RewardManager';
 import { Logger } from './modules/Logger';
+import { EventManager } from './modules/EventManager';
 
 export class MemberGrowthSDK {
   private config: SDKConfig;
@@ -36,6 +44,7 @@ export class MemberGrowthSDK {
   private pointManager: PointManager;
   private growthManager: GrowthManager;
   private rewardManager: RewardManager;
+  private eventManager: EventManager;
 
   constructor(config: SDKConfig) {
     const storage: StorageAdapter = config.storage || new MemoryStorage();
@@ -48,15 +57,17 @@ export class MemberGrowthSDK {
     this.logger = new Logger(this.config);
     this.growthManager = new GrowthManager(this.storage, this.configManager, this.logger);
     this.pointManager = new PointManager(this.storage, this.configManager, this.logger, this.growthManager);
+    this.memberManager = new MemberManager(this.storage, this.configManager, this.logger);
     this.rewardManager = new RewardManager(
       this.storage,
       this.configManager,
       this.logger,
       this.pointManager,
-      this.growthManager
+      this.growthManager,
+      this.memberManager
     );
     this.growthManager.setRewardManager(this.rewardManager);
-    this.memberManager = new MemberManager(this.storage, this.configManager, this.logger);
+    this.eventManager = new EventManager(this.storage);
   }
 
   async register(profile: MemberProfile): Promise<MemberAccount> {
@@ -111,8 +122,20 @@ export class MemberGrowthSDK {
     return this.growthManager.addFromOrder(memberId, orderAmount, orderId);
   }
 
-  signIn(memberId: string): Promise<SignInResult> {
-    return this.rewardManager.signIn(memberId);
+  signIn(memberId: string, options?: { returnMemberInfo?: boolean }): Promise<SignInResult> {
+    return this.rewardManager.signIn(memberId, options);
+  }
+
+  makeupSignIn(memberId: string, targetDate: string | number): Promise<MakeupSignInResult> {
+    return this.rewardManager.makeupSignIn(memberId, targetDate);
+  }
+
+  getSignInStatus(memberId: string): Promise<SignInStatus> {
+    return this.rewardManager.getSignInStatus(memberId);
+  }
+
+  placeOrder(memberId: string, orderAmount: number, orderId: string): Promise<PlaceOrderResult> {
+    return this.rewardManager.placeOrder(memberId, orderAmount, orderId);
   }
 
   triggerBirthdayReward(memberId: string): Promise<BirthdayRewardResult> {
@@ -131,7 +154,11 @@ export class MemberGrowthSDK {
     return this.rewardManager.getCoupons(memberId, status);
   }
 
-  getExpiringCoupons(memberId: string, days?: number): Promise<Coupon[]> {
+  getCouponList(memberId: string): Promise<CouponListResult> {
+    return this.rewardManager.getCouponList(memberId);
+  }
+
+  getExpiringCoupons(memberId: string, days?: number): Promise<CouponWithExpireInfo[]> {
     return this.rewardManager.getExpiringCoupons(memberId, days);
   }
 
@@ -149,6 +176,10 @@ export class MemberGrowthSDK {
 
   getLevelChangeRecords(memberId: string, limit?: number): Promise<LevelChangeRecord[]> {
     return this.growthManager.getLevelChangeRecords(memberId, limit);
+  }
+
+  getMemberEvents(memberId: string, query?: MemberEventQuery): Promise<MemberEventList> {
+    return this.eventManager.getMemberEvents(memberId, query);
   }
 
   getLevels(): MemberLevel[] {
