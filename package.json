@@ -1,0 +1,27 @@
+{
+  "name": "member-growth-sdk",
+  "version": "1.0.0",
+  "description": "会员成长体系 SDK - 供电商和订阅服务快速接入",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "test": "node dist/tests/index.js",
+    "example": "node dist/examples/basic.js"
+  },
+  "keywords": [
+    "member",
+    "growth",
+    "sdk",
+    "loyalty",
+    "points",
+    "vip"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.10.0"
+  }
+}
