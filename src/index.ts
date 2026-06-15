@@ -26,6 +26,7 @@ import {
   CouponWithExpireInfo,
   MemberEventQuery,
   MemberEventList,
+  MemberSnapshot,
 } from './types';
 import { ConfigManager } from './config/ConfigManager';
 import { MemoryStorage } from './storage/MemoryStorage';
@@ -169,6 +170,14 @@ export class MemberGrowthSDK {
 
   refundOrder(memberId: string, orderId: string, orderAmount: number): Promise<RefundOrderResult> {
     return this.rewardManager.refundOrder(memberId, orderId, orderAmount);
+  }
+
+  partialRefund(memberId: string, orderId: string, orderAmount: number, refundAmount: number): Promise<RefundOrderResult> {
+    return this.rewardManager.partialRefund(memberId, orderId, orderAmount, refundAmount);
+  }
+
+  cancelOrder(memberId: string, orderId: string, orderAmount: number): Promise<RefundOrderResult> {
+    return this.rewardManager.cancelOrder(memberId, orderId, orderAmount);
   }
 
   getPointRecords(memberId: string, limit?: number): Promise<PointRecord[]> {

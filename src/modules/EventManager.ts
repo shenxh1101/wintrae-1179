@@ -27,6 +27,8 @@ const EVENT_TITLE_MAP: Record<EventType, string> = {
   use_coupon: '使用优惠券',
   place_order: '下单消费',
   refund_order: '退款结算',
+  cancel_order: '取消订单',
+  partial_refund: '部分退款',
 };
 
 export class EventManager {
@@ -43,6 +45,9 @@ export class EventManager {
     const startTime = query.startTime;
     const endTime = query.endTime;
     const bizId = query.bizId;
+    const source = query.source;
+    const couponSource = query.couponSource;
+    const rewardSource = query.rewardSource;
 
     const allEvents: MemberEvent[] = [];
 
@@ -61,6 +66,47 @@ export class EventManager {
       levelResult instanceof Promise ? await levelResult : levelResult,
     ]);
 
+    let couponSourceIds: Set<string> | null = null;
+    if (couponSource && this.storage.getCouponsBySource) {
+      const couponsResult = this.storage.getCouponsBySource(memberId, couponSource);
+      const coupons: Coupon[] = couponsResult instanceof Promise ? await couponsResult : couponsResult;
+      couponSourceIds = new Set(coupons.map(c => c.id));
+    }
+
+    let rewardSourceEventIds: Set<string> | null = null;
+    if (rewardSource) {
+      let matchingPointRecords: import('../types').PointRecord[] = [];
+      let matchingGrowthRecords: import('../types').GrowthRecord[] = [];
+
+      if (this.storage.getPointRecordsBySource) {
+        const result = this.storage.getPointRecordsBySource(memberId, rewardSource);
+        matchingPointRecords = result instanceof Promise ? await result : result;
+      } else {
+        matchingPointRecords = pointRecords.filter(r => r.source === rewardSource);
+      }
+
+      if (this.storage.getGrowthRecordsBySource) {
+        const result = this.storage.getGrowthRecordsBySource(memberId, rewardSource);
+        matchingGrowthRecords = result instanceof Promise ? await result : result;
+      } else {
+        matchingGrowthRecords = growthRecords.filter(r => r.source === rewardSource);
+      }
+
+      const detailBizIds = new Set<string>();
+      for (const r of matchingPointRecords) if (r.bizId) detailBizIds.add(r.bizId);
+      for (const r of matchingGrowthRecords) if (r.bizId) detailBizIds.add(r.bizId);
+
+      rewardSourceEventIds = new Set();
+      for (const log of rawLogs) {
+        const detail = log.detail || {};
+        if (detail.source === rewardSource
+          || detail.bizId && detailBizIds.has(detail.bizId)
+          || detail.orderId && detailBizIds.has(detail.orderId)) {
+          rewardSourceEventIds.add(log.id);
+        }
+      }
+    }
+
     for (const log of rawLogs) {
       const eventType = log.action as EventType;
       if (types && types.length > 0 && !types.includes(eventType)) continue;
@@ -73,6 +119,20 @@ export class EventManager {
       if (bizId) {
         const eventBizId = event.bizId || log.detail?.orderId || log.detail?.bizId;
         if (eventBizId !== bizId) continue;
+      }
+
+      if (source) {
+        const eventSource = log.detail?.source;
+        if (eventSource !== source) continue;
+      }
+
+      if (couponSourceIds !== null) {
+        const eventCouponId = event.couponId || log.detail?.couponId;
+        if (!eventCouponId || !couponSourceIds.has(eventCouponId)) continue;
+      }
+
+      if (rewardSourceEventIds !== null) {
+        if (!rewardSourceEventIds.has(log.id)) continue;
       }
 
       allEvents.push(event);
@@ -216,10 +276,23 @@ export class EventManager {
         pointsChange = -(detail.pointsDeducted || 0);
         growthChange = -(detail.growthDeducted || 0);
         bizId = detail.orderId || bizId;
-        description = `退款 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}${detail.couponsRevoked?.length ? `，回收${detail.couplingsRevoked?.length || detail.couponsRevoked.length}张券` : ''}`;
-        if (detail.couponsRevoked?.length) {
-          description = `退款 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}，回收${detail.couponsRevoked.length}张券`;
-        }
+        description = `退款 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}，回收${detail.couponsRevoked?.length || 0}张券`;
+        levelBefore = detail.oldLevel;
+        levelAfter = detail.newLevel;
+        break;
+      case 'cancel_order':
+        pointsChange = -(detail.pointsDeducted || 0);
+        growthChange = -(detail.growthDeducted || 0);
+        bizId = detail.orderId || bizId;
+        description = `取消订单 ¥${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}，回收${detail.couponsRevoked?.length || 0}张券`;
+        levelBefore = detail.oldLevel;
+        levelAfter = detail.newLevel;
+        break;
+      case 'partial_refund':
+        pointsChange = -(detail.pointsDeducted || 0);
+        growthChange = -(detail.growthDeducted || 0);
+        bizId = detail.orderId || bizId;
+        description = `部分退款 ¥${detail.refundAmount || 0}/${detail.orderAmount || 0}${pointsChange ? `，${pointsChange}积分` : ''}${growthChange ? `，${growthChange}成长值` : ''}${detail.levelChanged ? `，降级到Lv.${detail.newLevel}` : ''}`;
         levelBefore = detail.oldLevel;
         levelAfter = detail.newLevel;
         break;

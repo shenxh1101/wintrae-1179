@@ -153,6 +153,22 @@ export class MemoryStorage implements StorageAdapter {
     if (endDate) {
       filtered = filtered.filter(r => r.date <= endDate);
     }
-    return filtered.sort((a, b) => a.date.localeCompare(b.date));
+    return filtered.sort((a, b) => a.date.localeCompare(b.date) || a.createTime - b.createTime);
+  }
+
+  getCouponsBySource(memberId: string, source: string): Coupon[] {
+    const couponIds = this.memberCoupons.get(memberId) || [];
+    const coupons = couponIds.map(id => this.coupons.get(id)!).filter(Boolean);
+    return coupons.filter(c => c.source === source);
+  }
+
+  getPointRecordsBySource(memberId: string, source: string): PointRecord[] {
+    const records = this.pointRecords.get(memberId) || [];
+    return records.filter(r => r.source === source).sort((a, b) => b.createTime - a.createTime);
+  }
+
+  getGrowthRecordsBySource(memberId: string, source: string): GrowthRecord[] {
+    const records = this.growthRecords.get(memberId) || [];
+    return records.filter(r => r.source === source).sort((a, b) => b.createTime - a.createTime);
   }
 }

@@ -207,6 +207,9 @@ export interface StorageAdapter {
   getSignInDailyRecords?(memberId: string, startDate?: string, endDate?: string): Promise<SignInDailyRecord[]> | SignInDailyRecord[];
   getPointRecordsByBizId?(bizId: string): Promise<PointRecord[]> | PointRecord[];
   getGrowthRecordsByBizId?(bizId: string): Promise<GrowthRecord[]> | GrowthRecord[];
+  getCouponsBySource?(memberId: string, source: string): Promise<Coupon[]> | Coupon[];
+  getPointRecordsBySource?(memberId: string, source: string): Promise<PointRecord[]> | PointRecord[];
+  getGrowthRecordsBySource?(memberId: string, source: string): Promise<GrowthRecord[]> | GrowthRecord[];
 }
 
 export interface EarnPointsResult {
@@ -263,8 +266,11 @@ export interface SignInCalendarItem {
   signedIn: boolean;
   type: 'normal' | 'makeup' | 'none';
   dayInCycle: number;
+  cycle: number;
   reward?: SignInReward;
   canMakeup: boolean;
+  signTime?: number;
+  signType?: 'normal' | 'makeup';
 }
 
 export interface SignInStatus {
@@ -309,8 +315,10 @@ export interface PlaceOrderResult {
 
 export interface RefundOrderResult {
   success: boolean;
+  refundType: 'full_refund' | 'partial_refund' | 'cancel_order';
   orderId: string;
   orderAmount: number;
+  refundAmount: number;
   pointsDeducted: number;
   growthDeducted: number;
   totalPoints: number;
@@ -325,6 +333,26 @@ export interface RefundOrderResult {
   benefits: BenefitPackage[];
   privileges: string[];
   memberInfo: MemberInfoResult | null;
+  snapshot: MemberSnapshot;
+}
+
+export interface MemberSnapshot {
+  level: number;
+  levelName: string;
+  growth: number;
+  totalGrowth: number;
+  points: number;
+  totalPointsEarned: number;
+  totalPointsSpent: number;
+  continuousSignInDays: number;
+  totalSignInDays: number;
+  todaySignedIn: boolean;
+  benefits: BenefitPackage[];
+  privileges: string[];
+  unusedCouponCount: number;
+  usedCouponCount: number;
+  expiredCouponCount: number;
+  revokedCouponCount: number;
 }
 
 export interface CouponListResult {
@@ -355,7 +383,9 @@ export type EventType =
   | 'issue_coupon'
   | 'use_coupon'
   | 'place_order'
-  | 'refund_order';
+  | 'refund_order'
+  | 'cancel_order'
+  | 'partial_refund';
 
 export interface MemberEvent {
   id: string;
@@ -382,6 +412,9 @@ export interface MemberEventQuery {
   page?: number;
   pageSize?: number;
   bizId?: string;
+  source?: string;
+  couponSource?: string;
+  rewardSource?: string;
 }
 
 export interface MemberEventList {
