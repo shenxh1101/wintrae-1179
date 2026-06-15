@@ -7,6 +7,7 @@ import {
   TaskRecord,
   OperationLog,
   SignInDailyRecord,
+  OrderSettlementRecord,
   StorageAdapter,
 } from '../types';
 
@@ -20,6 +21,7 @@ export class MemoryStorage implements StorageAdapter {
   private taskRecords: Map<string, Map<string, TaskRecord>> = new Map();
   private operationLogs: OperationLog[] = [];
   private signInDailyRecords: Map<string, SignInDailyRecord[]> = new Map();
+  private orderSettlementRecords: Map<string, OrderSettlementRecord[]> = new Map();
 
   getMember(memberId: string): MemberAccount | null {
     return this.members.get(memberId) || null;
@@ -170,5 +172,53 @@ export class MemoryStorage implements StorageAdapter {
   getGrowthRecordsBySource(memberId: string, source: string): GrowthRecord[] {
     const records = this.growthRecords.get(memberId) || [];
     return records.filter(r => r.source === source).sort((a, b) => b.createTime - a.createTime);
+  }
+
+  addOrderSettlementRecord(record: OrderSettlementRecord): void {
+    if (!this.orderSettlementRecords.has(record.memberId)) {
+      this.orderSettlementRecords.set(record.memberId, []);
+    }
+    this.orderSettlementRecords.get(record.memberId)!.push(record);
+  }
+
+  getOrderSettlementRecords(memberId: string, orderId?: string): OrderSettlementRecord[] {
+    const records = this.orderSettlementRecords.get(memberId) || [];
+    let filtered = records;
+    if (orderId) {
+      filtered = filtered.filter(r => r.orderId === orderId);
+    }
+    return filtered.sort((a, b) => b.createTime - a.createTime);
+  }
+
+  getOrderSettlementSummary(memberId: string, orderId: string): {
+    pointsEarned: number;
+    pointsRefunded: number;
+    pointsRemaining: number;
+    growthEarned: number;
+    growthRefunded: number;
+    growthRemaining: number;
+    refundAmountTotal: number;
+  } {
+    const records = this.getOrderSettlementRecords(memberId, orderId);
+    if (records.length === 0) {
+      return {
+        pointsEarned: 0, pointsRefunded: 0, pointsRemaining: 0,
+        growthEarned: 0, growthRefunded: 0, growthRemaining: 0,
+        refundAmountTotal: 0,
+      };
+    }
+    const first = records[records.length - 1];
+    const pointsRefunded = records.reduce((sum, r) => sum + (r.pointsRefunded - 0), 0);
+    const growthRefunded = records.reduce((sum, r) => sum + (r.growthRefunded - 0), 0);
+    const refundAmountTotal = records.reduce((sum, r) => sum + r.refundAmount, 0);
+    return {
+      pointsEarned: first.pointsEarned,
+      pointsRefunded,
+      pointsRemaining: first.pointsEarned - pointsRefunded,
+      growthEarned: first.growthEarned,
+      growthRefunded,
+      growthRemaining: first.growthEarned - growthRefunded,
+      refundAmountTotal,
+    };
   }
 }

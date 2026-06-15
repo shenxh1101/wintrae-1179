@@ -49,6 +49,27 @@ export interface LevelChangeRecord {
   createTime: number;
 }
 
+export interface OrderSettlementRecord {
+  id: string;
+  memberId: string;
+  orderId: string;
+  orderAmount: number;
+  refundAmount: number;
+  refundType: 'full_refund' | 'partial_refund' | 'cancel_order';
+  pointsEarned: number;
+  pointsRefunded: number;
+  pointsRemaining: number;
+  growthEarned: number;
+  growthRefunded: number;
+  growthRemaining: number;
+  levelBefore: number;
+  levelAfter: number;
+  couponsRevoked: string[];
+  couponsKept: string[];
+  createTime: number;
+  remark?: string;
+}
+
 export interface Coupon {
   id: string;
   memberId: string;
@@ -210,6 +231,25 @@ export interface StorageAdapter {
   getCouponsBySource?(memberId: string, source: string): Promise<Coupon[]> | Coupon[];
   getPointRecordsBySource?(memberId: string, source: string): Promise<PointRecord[]> | PointRecord[];
   getGrowthRecordsBySource?(memberId: string, source: string): Promise<GrowthRecord[]> | GrowthRecord[];
+  addOrderSettlementRecord?(record: OrderSettlementRecord): Promise<void> | void;
+  getOrderSettlementRecords?(memberId: string, orderId?: string): Promise<OrderSettlementRecord[]> | OrderSettlementRecord[];
+  getOrderSettlementSummary?(memberId: string, orderId: string): Promise<{
+    pointsEarned: number;
+    pointsRefunded: number;
+    pointsRemaining: number;
+    growthEarned: number;
+    growthRefunded: number;
+    growthRemaining: number;
+    refundAmountTotal: number;
+  }> | {
+    pointsEarned: number;
+    pointsRefunded: number;
+    pointsRemaining: number;
+    growthEarned: number;
+    growthRefunded: number;
+    growthRemaining: number;
+    refundAmountTotal: number;
+  };
 }
 
 export interface EarnPointsResult {
@@ -319,8 +359,15 @@ export interface RefundOrderResult {
   orderId: string;
   orderAmount: number;
   refundAmount: number;
+  refundAmountTotal: number;
   pointsDeducted: number;
+  pointsEarnedTotal: number;
+  pointsRefundedTotal: number;
+  pointsRemaining: number;
   growthDeducted: number;
+  growthEarnedTotal: number;
+  growthRefundedTotal: number;
+  growthRemaining: number;
   totalPoints: number;
   totalGrowth: number;
   levelChanged: boolean;
@@ -330,10 +377,13 @@ export interface RefundOrderResult {
   currentLevelName: string;
   couponsRevoked: Coupon[];
   couponsRevokedCount: number;
+  couponsKept: Coupon[];
+  couponsKeptCount: number;
   benefits: BenefitPackage[];
   privileges: string[];
   memberInfo: MemberInfoResult | null;
   snapshot: MemberSnapshot;
+  settlementId: string;
 }
 
 export interface MemberSnapshot {
@@ -423,6 +473,28 @@ export interface MemberEventList {
   page: number;
   pageSize: number;
   hasMore: boolean;
+}
+
+export interface OrderTrail {
+  orderId: string;
+  orderAmount: number;
+  refundAmountTotal: number;
+  points: {
+    earned: number;
+    refunded: number;
+    remaining: number;
+  };
+  growth: {
+    earned: number;
+    refunded: number;
+    remaining: number;
+  };
+  events: MemberEvent[];
+  settlementRecords: OrderSettlementRecord[];
+  levelBefore: number;
+  levelAfter: number;
+  couponsRevoked: string[];
+  couponsKept: string[];
 }
 
 export interface CompleteTaskResult {

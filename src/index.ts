@@ -27,6 +27,7 @@ import {
   MemberEventQuery,
   MemberEventList,
   MemberSnapshot,
+  OrderTrail,
 } from './types';
 import { ConfigManager } from './config/ConfigManager';
 import { MemoryStorage } from './storage/MemoryStorage';
@@ -198,6 +199,10 @@ export class MemberGrowthSDK {
 
   getEventsByBizId(bizId: string, query?: MemberEventQuery): Promise<MemberEventList> {
     return this.eventManager.getEventsByBizId(bizId, query);
+  }
+
+  getOrderTrail(memberId: string, orderId: string): Promise<OrderTrail> {
+    return this.eventManager.getOrderTrail(memberId, orderId);
   }
 
   getLevels(): MemberLevel[] {

@@ -428,7 +428,7 @@ export class RewardManager {
       }
     }
 
-    account.continuousSignInDays = Math.min(account.continuousSignInDays + 1, cycleDays);
+    account.continuousSignInDays += 1;
     account.totalSignInDays += 1;
     account.makeupUsedCount = (account.makeupUsedCount || 0) + 1;
 
@@ -513,9 +513,7 @@ export class RewardManager {
     for (let i = 0; i < cycleDays; i++) {
       const d = addDays(today, -(cycleDays - 1 - i));
       const dateStr = formatDate(d);
-      const dayInCycle = i + 1;
       const record = dailyMap.get(dateStr);
-      const reward = signInConfig?.rewards?.find(r => r.day === dayInCycle);
       const isPast = d < today;
       const isToday = dateStr === todayStr;
 
@@ -524,15 +522,17 @@ export class RewardManager {
       let signTime: number | undefined;
       let signType: 'normal' | 'makeup' | undefined;
       let recordCycle = 1;
-      let recordDayInCycle = dayInCycle;
+      let recordDayInCycle = 0;
+      let reward: import('../types').SignInReward | undefined;
 
       if (record) {
         signedIn = true;
         type = record.type;
         signTime = record.createTime;
         signType = record.type;
-        recordCycle = record.cycle;
+        recordCycle = record.cycle || 1;
         recordDayInCycle = record.dayInCycle;
+        reward = signInConfig?.rewards?.find(r => r.day === record.dayInCycle);
       }
 
       let canMakeup = false;
@@ -548,9 +548,11 @@ export class RewardManager {
 
       calendar.push({
         date: dateStr, signedIn, type, dayInCycle: recordDayInCycle, cycle: recordCycle,
-        reward, canMakeup, signTime, signType,
+        reward: signedIn ? reward : undefined, canMakeup, signTime, signType,
       });
     }
+
+    calendar.sort((a, b) => a.date.localeCompare(b.date));
 
     const currentRewards = (signInConfig?.rewards || []).filter(r => r.day > day).slice(0, 3);
     const expiringCoupons = await this.getExpiringCoupons(memberId, 7);
@@ -674,6 +676,55 @@ export class RewardManager {
     };
   }
 
+  private async getOrderSettlementSummary(memberId: string, orderId: string): Promise<{
+    pointsEarned: number;
+    pointsRefunded: number;
+    pointsRemaining: number;
+    growthEarned: number;
+    growthRefunded: number;
+    growthRemaining: number;
+    refundAmountTotal: number;
+  }> {
+    if (this.storage.getOrderSettlementSummary) {
+      const result = this.storage.getOrderSettlementSummary(memberId, orderId);
+      return result instanceof Promise ? await result : result;
+    }
+    if (this.storage.getOrderSettlementRecords) {
+      const recordsResult = this.storage.getOrderSettlementRecords(memberId, orderId);
+      const records = recordsResult instanceof Promise ? await recordsResult : recordsResult;
+      if (records.length === 0) {
+        return {
+          pointsEarned: 0, pointsRefunded: 0, pointsRemaining: 0,
+          growthEarned: 0, growthRefunded: 0, growthRemaining: 0,
+          refundAmountTotal: 0,
+        };
+      }
+      const pointsEarned = records[0].pointsEarned;
+      const growthEarned = records[0].growthEarned;
+      const pointsRefunded = records.reduce((sum, r) => sum + r.pointsRefunded, 0);
+      const growthRefunded = records.reduce((sum, r) => sum + r.growthRefunded, 0);
+      const refundAmountTotal = records.reduce((sum, r) => sum + r.refundAmount, 0);
+      return {
+        pointsEarned, pointsRefunded, pointsRemaining: pointsEarned - pointsRefunded,
+        growthEarned, growthRefunded, growthRemaining: growthEarned - growthRefunded,
+        refundAmountTotal,
+      };
+    }
+    return {
+      pointsEarned: 0, pointsRefunded: 0, pointsRemaining: 0,
+      growthEarned: 0, growthRefunded: 0, growthRemaining: 0,
+      refundAmountTotal: 0,
+    };
+  }
+
+  private getLevelFromCouponSource(source: string): number | null {
+    const match = source.match(/Lv\.(\d+)/i);
+    if (match) return parseInt(match[1], 10);
+    const match2 = source.match(/升级到第?(\d+)/);
+    if (match2) return parseInt(match2[1], 10);
+    return null;
+  }
+
   private async executeReverseSettlement(
     memberId: string,
     orderId: string,
@@ -686,109 +737,144 @@ export class RewardManager {
     if (!account) {
       return {
         success: false, refundType, orderId, orderAmount, refundAmount,
-        pointsDeducted: 0, growthDeducted: 0,
+        refundAmountTotal: 0,
+        pointsDeducted: 0, pointsEarnedTotal: 0, pointsRefundedTotal: 0, pointsRemaining: 0,
+        growthDeducted: 0, growthEarnedTotal: 0, growthRefundedTotal: 0, growthRemaining: 0,
         totalPoints: 0, totalGrowth: 0, levelChanged: false,
         currentLevel: defaultLevel, currentLevelName: this.configManager.getLevel(defaultLevel)?.name || '',
-        couponsRevoked: [], couponsRevokedCount: 0, benefits: [], privileges: [], memberInfo: null,
+        couponsRevoked: [], couponsRevokedCount: 0, couponsKept: [], couponsKeptCount: 0,
+        benefits: [], privileges: [], memberInfo: null,
         snapshot: await this.buildMemberSnapshot(memberId),
+        settlementId: '',
       };
     }
 
     const orderPointRecords = await this.getPointRecordsByBizId(orderId);
     const orderGrowthRecords = await this.getGrowthRecordsByBizId(orderId);
 
-    let pointsDeducted = 0;
-    if (refundType === 'partial_refund') {
-      const earnedPoints = orderPointRecords
-        .filter(pr => pr.type === 'earn' && pr.source === 'order')
-        .reduce((sum, pr) => sum + pr.amount, 0);
-      const ratio = orderAmount > 0 ? refundAmount / orderAmount : 0;
-      pointsDeducted = Math.floor(earnedPoints * ratio);
+    const totalEarnedPoints = orderPointRecords
+      .filter(pr => pr.type === 'earn' && pr.source === 'order')
+      .reduce((sum, pr) => sum + pr.amount, 0);
+
+    const totalEarnedGrowth = orderGrowthRecords
+      .filter(gr => gr.source === 'order')
+      .reduce((sum, gr) => sum + gr.amount, 0);
+
+    const historySummary = await this.getOrderSettlementSummary(memberId, orderId);
+    const isFirstRefund = historySummary.pointsEarned === 0;
+
+    const pointsEarnedTotal = isFirstRefund ? totalEarnedPoints : historySummary.pointsEarned;
+    const growthEarnedTotal = isFirstRefund ? totalEarnedGrowth : historySummary.growthEarned;
+
+    const pointsRefundedBefore = historySummary.pointsRefunded;
+    const growthRefundedBefore = historySummary.growthRefunded;
+    const refundAmountBefore = historySummary.refundAmountTotal;
+
+    const remainingRefundAmount = Math.max(0, orderAmount - refundAmountBefore);
+    const actualRefundAmount = Math.min(refundAmount, remainingRefundAmount);
+
+    let pointsThisRefund = 0;
+    let growthThisRefund = 0;
+
+    if (refundType === 'full_refund' || refundType === 'cancel_order') {
+      pointsThisRefund = Math.max(0, pointsEarnedTotal - pointsRefundedBefore);
+      growthThisRefund = Math.max(0, growthEarnedTotal - growthRefundedBefore);
     } else {
-      for (const pr of orderPointRecords) {
-        if (pr.type === 'earn' && pr.source === 'order') {
-          pointsDeducted += pr.amount;
-        }
-      }
+      const ratio = orderAmount > 0 ? actualRefundAmount / orderAmount : 0;
+      const theoreticalPoints = Math.floor(pointsEarnedTotal * ratio);
+      const theoreticalGrowth = Math.floor(growthEarnedTotal * ratio);
+      pointsThisRefund = Math.min(theoreticalPoints, pointsEarnedTotal - pointsRefundedBefore);
+      growthThisRefund = Math.min(theoreticalGrowth, growthEarnedTotal - growthRefundedBefore);
     }
 
-    let growthDeducted = 0;
-    if (refundType === 'partial_refund') {
-      const earnedGrowth = orderGrowthRecords
-        .filter(gr => gr.source === 'order')
-        .reduce((sum, gr) => sum + gr.amount, 0);
-      const ratio = orderAmount > 0 ? refundAmount / orderAmount : 0;
-      growthDeducted = Math.floor(earnedGrowth * ratio);
-    } else {
-      for (const gr of orderGrowthRecords) {
-        if (gr.source === 'order') {
-          growthDeducted += gr.amount;
-        }
-      }
-    }
+    pointsThisRefund = Math.max(0, pointsThisRefund);
+    growthThisRefund = Math.max(0, growthThisRefund);
 
-    if (pointsDeducted > 0) {
-      const actualDeduction = Math.min(pointsDeducted, account.points);
+    if (pointsThisRefund > 0) {
+      const actualDeduction = Math.min(pointsThisRefund, account.points);
       if (actualDeduction > 0) {
-        await this.pointManager.spend(memberId, actualDeduction, refundType === 'cancel_order' ? 'cancel_order' : 'refund', {
-          bizId: orderId,
-          remark: refundType === 'cancel_order'
-            ? `取消订单 ${orderId}，扣除积分`
-            : refundType === 'partial_refund'
-              ? `部分退款 ¥${refundAmount} 订单 ${orderId}，扣除积分`
-              : `退款订单 ${orderId}，扣除积分`,
-        });
-        pointsDeducted = actualDeduction;
+        const sourceStr = refundType === 'cancel_order' ? 'cancel_order' : 'refund';
+        let remark = '';
+        if (refundType === 'cancel_order') remark = `取消订单 ${orderId}，扣除积分`;
+        else if (refundType === 'partial_refund') remark = `部分退款 ¥${refundAmount} 订单 ${orderId}，扣除积分`;
+        else remark = `退款订单 ${orderId}，扣除积分`;
+        await this.pointManager.spend(memberId, actualDeduction, sourceStr, { bizId: orderId, remark });
+        pointsThisRefund = actualDeduction;
       } else {
-        pointsDeducted = 0;
+        pointsThisRefund = 0;
       }
-    }
-
-    if (growthDeducted > 0) {
-      const actualGrowthDeduction = Math.min(growthDeducted, account.growth);
-      if (actualGrowthDeduction > 0) {
-        account.growth -= actualGrowthDeduction;
-      }
-      growthDeducted = actualGrowthDeduction;
     }
 
     const oldLevel = account.level;
-    if (growthDeducted > 0) {
+    const growthDeductedActual = Math.min(growthThisRefund, account.growth);
+    if (growthDeductedActual > 0) {
+      account.growth -= growthDeductedActual;
       const newLevelInfo = this.configManager.getLevelByGrowth(account.growth);
       account.level = newLevelInfo.level;
     }
 
     const couponsRevoked: Coupon[] = [];
-    const shouldRevokeCoupons = oldLevel > account.level;
-    if (shouldRevokeCoupons) {
-      const allCouponsResult = this.storage.getCoupons(memberId);
-      const allCoupons: Coupon[] = allCouponsResult instanceof Promise ? await allCouponsResult : allCouponsResult;
-      for (const coupon of allCoupons) {
-        if (coupon.source && (coupon.source.includes('升级') || coupon.source.includes('Lv.'))) {
-          if (coupon.status === 'unused') {
-            await this.storage.updateCoupon(coupon.id, {
-              status: 'revoked',
-              revokeReason: refundType === 'cancel_order'
-                ? `取消订单 ${orderId}，等级变更回收`
-                : `退款订单 ${orderId}，等级变更回收`,
-            });
-            const updatedCoupon = (this.storage as any).getCouponById
-              ? await (this.storage as any).getCouponById(coupon.id)
-              : coupon;
-            if (updatedCoupon) couponsRevoked.push(updatedCoupon);
-          }
-        }
+    const couponsKept: Coupon[] = [];
+    const levelChanged = oldLevel !== account.level;
+
+    const allCouponsResult = this.storage.getCoupons(memberId);
+    const allCoupons: Coupon[] = allCouponsResult instanceof Promise ? await allCouponsResult : allCouponsResult;
+
+    for (const coupon of allCoupons) {
+      if (!coupon.source || !(coupon.source.includes('升级') || coupon.source.includes('Lv.'))) continue;
+      const couponLevel = this.getLevelFromCouponSource(coupon.source);
+      if (couponLevel === null) continue;
+
+      if (coupon.status !== 'unused') continue;
+
+      if (levelChanged && oldLevel > account.level && couponLevel > account.level) {
+        let reason = '';
+        if (refundType === 'cancel_order') reason = `取消订单 ${orderId}，等级从Lv.${oldLevel}降到Lv.${account.level}，回收${coupon.source}券`;
+        else reason = `退款订单 ${orderId}，等级从Lv.${oldLevel}降到Lv.${account.level}，回收${coupon.source}券`;
+        await this.storage.updateCoupon(coupon.id, { status: 'revoked', revokeReason: reason });
+        const updatedCoupon = (this.storage as any).getCouponById
+          ? await (this.storage as any).getCouponById(coupon.id)
+          : coupon;
+        if (updatedCoupon) couponsRevoked.push(updatedCoupon);
+      } else {
+        couponsKept.push(coupon);
       }
     }
 
     await this.storage.saveMember(account);
 
     const freshAccount = await this.storage.getMember(memberId);
-    const levelChanged = oldLevel !== freshAccount!.level;
     const levelInfo = this.configManager.getLevel(freshAccount!.level)!;
     const benefits = this.configManager.getBenefitPackages(freshAccount!.level);
     const privileges = Array.from(new Set(benefits.flatMap(b => b.privileges)));
     const memberInfo = await this.memberManager.getMemberInfo(memberId);
+
+    const pointsRefundedTotal = pointsRefundedBefore + pointsThisRefund;
+    const growthRefundedTotal = growthRefundedBefore + growthDeductedActual;
+    const pointsRemaining = Math.max(0, pointsEarnedTotal - pointsRefundedTotal);
+    const growthRemaining = Math.max(0, growthEarnedTotal - growthRefundedTotal);
+    const refundAmountTotal = refundAmountBefore + actualRefundAmount;
+
+    const settlementId = generateId('set_');
+    const settlementRecord: import('../types').OrderSettlementRecord = {
+      id: settlementId,
+      memberId, orderId, orderAmount, refundAmount: actualRefundAmount, refundType,
+      pointsEarned: pointsEarnedTotal,
+      pointsRefunded: pointsThisRefund,
+      pointsRemaining,
+      growthEarned: growthEarnedTotal,
+      growthRefunded: growthDeductedActual,
+      growthRemaining,
+      levelBefore: oldLevel,
+      levelAfter: freshAccount!.level,
+      couponsRevoked: couponsRevoked.map(c => c.id),
+      couponsKept: couponsKept.map(c => c.id),
+      createTime: Date.now(),
+    };
+    if (this.storage.addOrderSettlementRecord) {
+      const result = this.storage.addOrderSettlementRecord(settlementRecord);
+      if (result instanceof Promise) await result;
+    }
 
     const actionType = refundType === 'cancel_order' ? 'cancel_order' : refundType === 'partial_refund' ? 'partial_refund' : 'refund_order';
     await this.logger.log({
@@ -796,23 +882,32 @@ export class RewardManager {
       action: actionType,
       module: 'order',
       detail: {
-        orderId, orderAmount, refundAmount, refundType,
-        pointsDeducted, growthDeducted, levelChanged,
-        oldLevel, newLevel: freshAccount!.level,
+        settlementId, orderId, orderAmount, refundAmount: actualRefundAmount, refundType,
+        pointsEarnedTotal, pointsDeducted: pointsThisRefund, pointsRefundedTotal, pointsRemaining,
+        growthEarnedTotal, growthDeducted: growthDeductedActual, growthRefundedTotal, growthRemaining,
+        levelChanged, oldLevel, newLevel: freshAccount!.level,
         couponsRevoked: couponsRevoked.map(c => c.id),
+        couponsKept: couponsKept.map(c => c.id),
       },
     });
 
     const snapshot = await this.buildMemberSnapshot(memberId);
 
     return {
-      success: true, refundType, orderId, orderAmount, refundAmount,
-      pointsDeducted, growthDeducted,
+      success: true, refundType, orderId, orderAmount, refundAmount: actualRefundAmount,
+      refundAmountTotal,
+      pointsDeducted: pointsThisRefund,
+      pointsEarnedTotal, pointsRefundedTotal, pointsRemaining,
+      growthDeducted: growthDeductedActual,
+      growthEarnedTotal, growthRefundedTotal, growthRemaining,
       totalPoints: freshAccount!.points, totalGrowth: freshAccount!.totalGrowth,
-      levelChanged, oldLevel: levelChanged ? oldLevel : undefined, newLevel: levelChanged ? freshAccount!.level : undefined,
+      levelChanged,
+      oldLevel: levelChanged ? oldLevel : undefined,
+      newLevel: levelChanged ? freshAccount!.level : undefined,
       currentLevel: freshAccount!.level, currentLevelName: levelInfo.name,
       couponsRevoked, couponsRevokedCount: couponsRevoked.length,
-      benefits, privileges, memberInfo, snapshot,
+      couponsKept, couponsKeptCount: couponsKept.length,
+      benefits, privileges, memberInfo, snapshot, settlementId,
     };
   }
 

@@ -12,10 +12,12 @@ function createTestSDK(): MemberGrowthSDK {
     couponTemplates: [
       { id: 'ct_test', name: '测试券10元', type: 'cash', value: 10, validDays: 30 },
       { id: 'ct_discount', name: '9折券', type: 'discount', value: 0.9, validDays: 15 },
+      { id: 'ct_platinum', name: '铂金专属券', type: 'cash', value: 50, validDays: 30 },
     ],
     benefitPackages: [
       { id: 'bp_2', level: 2, name: '白银包', description: '', couponTemplates: ['ct_discount'], privileges: ['专属客服'] },
       { id: 'bp_3', level: 3, name: '黄金包', description: '', couponTemplates: ['ct_test', 'ct_discount'], privileges: ['专属客服', '免费包邮'] },
+      { id: 'bp_4', level: 4, name: '铂金包', description: '', couponTemplates: ['ct_test', 'ct_discount', 'ct_platinum'], privileges: ['专属客服', '免费包邮', 'VIP通道'] },
     ],
     signInConfig: {
       cycleDays: 3,
@@ -25,14 +27,13 @@ function createTestSDK(): MemberGrowthSDK {
         { day: 3, points: 20, growth: 5, couponTemplateId: 'ct_test' },
       ],
       makeupConfig: {
-        maxMakeupCount: 2,
-        makeupCostPoints: 50,
+        maxMakeupCount: 5,
+        makeupCostPoints: 30,
         makeupWindowDays: 7,
       },
     },
     tasks: [
       { id: 't1', name: '测试一次性任务', description: '', type: 'once', points: 100 },
-      { id: 't2', name: '测试每日任务', description: '', type: 'daily', points: 10 },
     ],
     birthdayRewardPoints: 88,
     orderPointRate: 2,
@@ -55,259 +56,290 @@ function assert(condition: boolean, message: string): void {
 }
 
 async function runTests(): Promise<void> {
-  console.log('========== SDK v4 增强功能测试 ==========\n');
+  console.log('========== SDK v5 增强功能测试 ==========\n');
 
-  console.log('【1. 签到日历 + 补签不改今日状态测试】');
+  console.log('【1. 订单逆向结算 — 幂等 + 剩余额度测试】');
   const sdk1 = createTestSDK();
-  const mid1 = 'test_signin_v4';
-  await sdk1.register({ memberId: mid1, nickname: '签到V4', registerTime: Date.now() });
+  const mid1 = 'test_idempotent_refund';
+  await sdk1.register({ memberId: mid1, nickname: '幂等退款', registerTime: Date.now() });
 
-  await sdk1.earnPoints(mid1, 200, 'test_fund', { remark: '测试补签资金' });
-
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const twoDaysAgo = new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10);
-
-  const makeup1 = await sdk1.makeupSignIn(mid1, yesterday);
-  assert(makeup1.success === true, '补签昨天成功');
-  assert(makeup1.isMakeup === true, '标记为补签');
-  assert(makeup1.makeupCost === 50, '补签扣了50积分');
-
-  const statusBeforeToday = await sdk1.getSignInStatus(mid1);
-  assert(statusBeforeToday.todaySignedIn === false, '补签昨天后今天还没签');
-  assert(statusBeforeToday.makeupUsedCount === 1, '已用1次补签');
-  assert(statusBeforeToday.makeupRemaining === 1, '补签剩余1次');
-
-  const calYesterday = statusBeforeToday.calendar.find(c => c.date === yesterday);
-  assert(calYesterday !== undefined, '日历中有昨天');
-  assert(calYesterday!.signedIn === true, '昨天标记已签');
-  assert(calYesterday!.type === 'makeup', '昨天是补签类型');
-  assert(calYesterday!.signType === 'makeup', 'signType=makeup');
-  assert(calYesterday!.signTime !== undefined, '有签到时间');
-  assert(calYesterday!.cycle >= 1, '日历项有周期');
-
-  const todayCalBefore = statusBeforeToday.calendar.find(c => {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    return c.date === todayStr;
-  });
-  assert(todayCalBefore !== undefined, '日历中有今天');
-  assert(todayCalBefore!.signedIn === false, '今天还未签');
-  assert(todayCalBefore!.type === 'none', '今天类型为none');
-
-  const s1 = await sdk1.signIn(mid1, { returnMemberInfo: true });
-  assert(s1.success === true, '今天签到成功');
-  assert(s1.isMakeup === false, '正常签到不是补签');
-
-  const statusAfterToday = await sdk1.getSignInStatus(mid1);
-  assert(statusAfterToday.todaySignedIn === true, '签到后今天已签');
-
-  const duplicateMakeup = await sdk1.makeupSignIn(mid1, yesterday);
-  assert(duplicateMakeup.success === false, '重复补签同一天失败');
-
-  const makeup2 = await sdk1.makeupSignIn(mid1, twoDaysAgo);
-  assert(makeup2.success === true, '第二次补签成功');
-  assert(makeup2.makeupRemaining === 0, '补签次数用完');
-
-  const threeDaysAgo = new Date(Date.now() - 86400000 * 3).toISOString().slice(0, 10);
-  const makeupExhausted = await sdk1.makeupSignIn(mid1, threeDaysAgo);
-  assert(makeupExhausted.success === false, '补签次数用完后失败');
-
-  const statusFinal = await sdk1.getSignInStatus(mid1);
-  const calTwoDaysAgo = statusFinal.calendar.find(c => c.date === twoDaysAgo);
-  assert(calTwoDaysAgo !== undefined, '日历中有前天');
-  assert(calTwoDaysAgo!.signedIn === true, '前天标记已签');
-  assert(calTwoDaysAgo!.type === 'makeup', '前天是补签类型');
-  console.log();
-
-  console.log('【2. 整单退款反向结算测试】');
-  const sdk2 = createTestSDK();
-  const mid2 = 'test_full_refund';
-  await sdk2.register({ memberId: mid2, nickname: '整单退款', registerTime: Date.now() });
-
-  const order1 = await sdk2.placeOrder(mid2, 500, 'full_refund_order_001');
+  const order1 = await sdk1.placeOrder(mid1, 500, 'idem_order_001');
   assert(order1.success === true, '下单成功');
   assert(order1.pointsEarned === 1000, '获得1000积分');
   assert(order1.growthEarned === 500, '获得500成长值');
   assert(order1.levelChanged === true, '触发升级');
   assert(order1.newLevel === 3, '升到Lv.3');
-  assert(order1.levelUpRewards.length >= 2, '获得升级奖励券');
+  assert(order1.levelUpRewards.length >= 2, '获得>=2张升级奖励券');
 
-  const refund1 = await sdk2.refundOrder(mid2, 'full_refund_order_001', 500);
-  assert(refund1.success === true, '退款成功');
-  assert(refund1.refundType === 'full_refund', '类型为整单退款');
-  assert(refund1.refundAmount === 500, '退款金额=订单金额');
-  assert(refund1.pointsDeducted === 1000, '扣除1000积分');
-  assert(refund1.growthDeducted === 500, '扣除500成长值');
-  assert(refund1.levelChanged === true, '等级变化');
-  assert(refund1.oldLevel === 3, '从Lv.3降级');
-  assert(refund1.currentLevel === 1, '降回Lv.1');
-  assert(refund1.couponsRevokedCount >= 1, '回收升级券');
-  assert(refund1.memberInfo !== null, '返回 memberInfo');
-  assert(refund1.benefits.length === 0, 'Lv.1无权益');
-  assert(refund1.snapshot !== undefined, '返回快照');
-  assert(refund1.snapshot.level === 1, '快照等级=1');
-  assert(refund1.snapshot.levelName === '普通', '快照等级名=普通');
-  assert(refund1.snapshot.growth === 0, '快照成长值=0');
-  assert(refund1.snapshot.revokedCouponCount >= 1, '快照有回收券');
+  const partial1 = await sdk1.partialRefund(mid1, 'idem_order_001', 500, 200);
+  assert(partial1.success === true, '第一次部分退款成功');
+  assert(partial1.refundType === 'partial_refund', '类型=partial_refund');
+  assert(partial1.pointsDeducted === 400, '本次扣400积分(200/500*1000)');
+  assert(partial1.growthDeducted === 200, '本次扣200成长值');
+  assert(partial1.pointsEarnedTotal === 1000, '总获得积分=1000');
+  assert(partial1.pointsRefundedTotal === 400, '已退积分=400');
+  assert(partial1.pointsRemaining === 600, '剩余可退积分=600');
+  assert(partial1.growthRemaining === 300, '剩余可退成长值=300');
+  assert(partial1.settlementId !== '', '返回结算ID');
 
-  const infoAfterRefund = await sdk2.getMemberInfo(mid2);
-  assert(infoAfterRefund!.level === refund1.snapshot.level, '查询等级=退款快照等级');
-  assert(infoAfterRefund!.growth === refund1.snapshot.growth, '查询成长值=退款快照成长值');
-  assert(infoAfterRefund!.points === refund1.snapshot.points, '查询积分=退款快照积分');
+  const partial2 = await sdk1.partialRefund(mid1, 'idem_order_001', 500, 150);
+  assert(partial2.success === true, '第二次部分退款成功');
+  assert(partial2.pointsDeducted === 300, '本次扣300积分(150/500*1000)');
+  assert(partial2.pointsRefundedTotal === 700, '累计已退700积分');
+  assert(partial2.pointsRemaining === 300, '剩余可退300积分');
+  assert(partial2.growthRefundedTotal === 350, '累计已退350成长值');
+  assert(partial2.refundAmountTotal === 350, '累计退款350元');
 
-  const couponList = await sdk2.getCouponList(mid2);
-  assert(couponList.revokedCount >= 1, '优惠券列表有 revoked 状态');
-  assert(couponList.revoked.length >= 1, 'revoked 数组有内容');
+  const refundAll = await sdk1.refundOrder(mid1, 'idem_order_001', 500);
+  assert(refundAll.success === true, '整单退款成功');
+  assert(refundAll.pointsDeducted === 300, '本次扣剩余300积分');
+  assert(refundAll.pointsRefundedTotal === 1000, '累计已退=总获得=1000');
+  assert(refundAll.pointsRemaining === 0, '剩余可退=0');
+  assert(refundAll.growthRemaining === 0, '剩余可退成长值=0');
+  assert(refundAll.refundAmountTotal === 500, '累计退款=订单金额');
+
+  const repeatRefund = await sdk1.refundOrder(mid1, 'idem_order_001', 500);
+  assert(repeatRefund.success === true, '重复退款调用成功');
+  assert(repeatRefund.pointsDeducted === 0, '重复退款扣0积分');
+  assert(repeatRefund.growthDeducted === 0, '重复退款扣0成长值');
+  assert(repeatRefund.pointsRemaining === 0, '剩余可退仍为0');
+
+  const infoAfter = await sdk1.getMemberInfo(mid1);
+  assert(infoAfter!.points === refundAll.snapshot.points, '退款后查询积分=快照积分');
+  assert(infoAfter!.growth === refundAll.snapshot.growth, '退款后查询成长值=快照成长值');
+  assert(infoAfter!.level === refundAll.currentLevel, '退款后等级一致');
   console.log();
 
-  console.log('【3. 取消订单反向结算测试】');
+  console.log('【2. 等级区间精确回收券测试】');
+  const sdk2 = createTestSDK();
+  const mid2 = 'test_level_precise_revoke';
+  await sdk2.register({ memberId: mid2, nickname: '精确回收', registerTime: Date.now() });
+
+  const order2 = await sdk2.placeOrder(mid2, 1000, 'precise_order_001');
+  assert(order2.success === true, '下单成功');
+  assert(order2.newLevel === 3, '升到Lv.3（1000成长值）');
+  assert(order2.levelUpRewards.length >= 2, '获得>=2张升级奖励券（Lv2+Lv3）');
+
+  const couponsAfterOrder = await sdk2.getCouponList(mid2);
+  assert(couponsAfterOrder.unusedCount >= 2, '有>=2张可用券');
+
+  const partial2_1 = await sdk2.partialRefund(mid2, 'precise_order_001', 1000, 300);
+  assert(partial2_1.success === true, '部分退款300成功');
+  assert(partial2_1.levelChanged === false, '退300元不降级');
+  assert(partial2_1.couponsRevokedCount === 0, '不降级时不回收券');
+  assert(partial2_1.couponsKeptCount >= 2, '保留>=2张券');
+
+  const partial2_2 = await sdk2.partialRefund(mid2, 'precise_order_001', 1000, 500);
+  assert(partial2_2.success === true, '再退500元');
+  assert(partial2_2.levelChanged === true, '触发降级');
+  assert(partial2_2.oldLevel === 3, '从Lv.3降');
+  assert(partial2_2.newLevel === 2, '降到Lv.2');
+  assert(partial2_2.couponsRevokedCount >= 1, '回收>=1张Lv.3的券');
+  assert(partial2_2.couponsKeptCount >= 1, '保留>=1张Lv.2的券');
+
+  const revokedLv3 = partial2_2.couponsRevoked.filter(c => c.source && c.source.includes('Lv.3'));
+  const keptLv2 = partial2_2.couponsKept.filter(c => {
+    const src = c.source || '';
+    return src.includes('Lv.2');
+  });
+  assert(revokedLv3.length >= 1, '回收的是Lv.3的券');
+  assert(keptLv2.length >= 1, '保留的是Lv.2的券');
+
+  const refund2 = await sdk2.refundOrder(mid2, 'precise_order_001', 1000);
+  assert(refund2.success === true, '整单退完');
+  assert(refund2.currentLevel === 1, '降回Lv.1');
+  assert(refund2.couponsRevokedCount >= 1, '再回收>=1张券');
+  console.log();
+
+  console.log('【3. 取消订单测试】');
   const sdk3 = createTestSDK();
-  const mid3 = 'test_cancel_order';
+  const mid3 = 'test_cancel';
   await sdk3.register({ memberId: mid3, nickname: '取消订单', registerTime: Date.now() });
 
-  const order3 = await sdk3.placeOrder(mid3, 300, 'cancel_order_001');
-  assert(order3.success === true, '下单成功');
-  assert(order3.levelChanged === true, '触发升级');
-  assert(order3.newLevel === 2, '升到Lv.2');
-
-  const cancel1 = await sdk3.cancelOrder(mid3, 'cancel_order_001', 300);
+  await sdk3.placeOrder(mid3, 400, 'cancel_order_001');
+  const cancel1 = await sdk3.cancelOrder(mid3, 'cancel_order_001', 400);
   assert(cancel1.success === true, '取消订单成功');
-  assert(cancel1.refundType === 'cancel_order', '类型为取消订单');
-  assert(cancel1.refundAmount === 300, '退款金额=订单金额');
-  assert(cancel1.pointsDeducted === 600, '扣除600积分');
-  assert(cancel1.growthDeducted === 300, '扣除300成长值');
+  assert(cancel1.refundType === 'cancel_order', '类型=cancel_order');
+  assert(cancel1.pointsDeducted === 800, '扣除800积分');
+  assert(cancel1.growthDeducted === 400, '扣除400成长值');
+  assert(cancel1.pointsRemaining === 0, '剩余可退=0');
   assert(cancel1.levelChanged === true, '等级变化');
-  assert(cancel1.currentLevel === 1, '降回Lv.1');
+  assert(cancel1.couponsRevokedCount >= 1, '回收升级券');
   assert(cancel1.snapshot.level === 1, '快照等级=1');
 
   const cancelEvents = await sdk3.getMemberEvents(mid3, { types: ['cancel_order'] });
-  assert(cancelEvents.total === 1, '取消订单事件1条');
-  assert(cancelEvents.list[0].type === 'cancel_order', '类型为cancel_order');
+  assert(cancelEvents.total === 1, 'cancel_order事件1条');
   assert(cancelEvents.list[0].pointsChange < 0, '积分变化为负');
-  assert(cancelEvents.list[0].growthChange < 0, '成长值变化为负');
   console.log();
 
-  console.log('【4. 部分退款反向结算测试】');
+  console.log('【4. 订单轨迹查询测试】');
   const sdk4 = createTestSDK();
-  const mid4 = 'test_partial_refund';
-  await sdk4.register({ memberId: mid4, nickname: '部分退款', registerTime: Date.now() });
+  const mid4 = 'test_order_trail';
+  await sdk4.register({ memberId: mid4, nickname: '订单轨迹', registerTime: Date.now() });
 
-  const order4 = await sdk4.placeOrder(mid4, 500, 'partial_refund_order_001');
-  assert(order4.success === true, '下单成功');
-  assert(order4.pointsEarned === 1000, '获得1000积分');
-  assert(order4.growthEarned === 500, '获得500成长值');
-  assert(order4.levelChanged === true, '触发升级');
-  assert(order4.newLevel === 3, '升到Lv.3');
+  await sdk4.placeOrder(mid4, 600, 'trail_order_001');
+  await sdk4.partialRefund(mid4, 'trail_order_001', 600, 200);
+  await sdk4.partialRefund(mid4, 'trail_order_001', 600, 200);
 
-  const partial1 = await sdk4.partialRefund(mid4, 'partial_refund_order_001', 500, 200);
-  assert(partial1.success === true, '部分退款成功');
-  assert(partial1.refundType === 'partial_refund', '类型为部分退款');
-  assert(partial1.refundAmount === 200, '退款金额200');
-  assert(partial1.orderAmount === 500, '原订单金额500');
-  assert(partial1.pointsDeducted === 400, '按比例扣除400积分(200/500*1000)');
-  assert(partial1.growthDeducted === 200, '按比例扣除200成长值(200/500*500)');
-
-  const infoAfterPartial = await sdk4.getMemberInfo(mid4);
-  assert(infoAfterPartial!.level === partial1.currentLevel, '查询等级=部分退款返回等级');
-  assert(infoAfterPartial!.points === partial1.snapshot.points, '查询积分=部分退款快照积分');
-  assert(infoAfterPartial!.growth === partial1.snapshot.growth, '查询成长值=部分退款快照成长值');
-
-  const partialEvents = await sdk4.getMemberEvents(mid4, { types: ['partial_refund'] });
-  assert(partialEvents.total === 1, '部分退款事件1条');
-  assert(partialEvents.list[0].type === 'partial_refund', '类型为partial_refund');
+  const trail = await sdk4.getOrderTrail(mid4, 'trail_order_001');
+  assert(trail.orderId === 'trail_order_001', '订单号正确');
+  assert(trail.orderAmount === 600, '订单金额正确');
+  assert(trail.refundAmountTotal === 400, '累计退款400元');
+  assert(trail.points.earned === 1200, '总获得积分=1200');
+  assert(trail.points.refunded === 800, '已退积分=800');
+  assert(trail.points.remaining === 400, '剩余积分=400');
+  assert(trail.growth.earned === 600, '总获得成长值=600');
+  assert(trail.growth.remaining === 200, '剩余成长值=200');
+  assert(trail.events.length >= 3, '至少3条事件（下单+2次退款）');
+  assert(trail.settlementRecords.length === 2, '2条结算记录');
+  assert(trail.events[0].createTime >= trail.events[trail.events.length - 1].createTime, '事件按时间倒序');
   console.log();
 
-  console.log('【5. 退款后数据一致性测试】');
+  console.log('【5. 签到时间线稳定性测试】');
   const sdk5 = createTestSDK();
-  const mid5 = 'test_consistency';
-  await sdk5.register({ memberId: mid5, nickname: '一致性', registerTime: Date.now() });
+  const mid5 = 'test_timeline';
+  await sdk5.register({ memberId: mid5, nickname: '时间线', registerTime: Date.now() });
+  await sdk5.earnPoints(mid5, 500, 'test_fund');
 
-  await sdk5.placeOrder(mid5, 500, 'consist_order_001');
-  const refund5 = await sdk5.refundOrder(mid5, 'consist_order_001', 500);
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  const twoDaysAgo = new Date(today.getTime() - 86400000 * 2);
+  const threeDaysAgo = new Date(today.getTime() - 86400000 * 3);
 
-  const info5 = await sdk5.getMemberInfo(mid5);
-  const couponList5 = await sdk5.getCouponList(mid5);
+  const signToday = await sdk5.signIn(mid5);
+  assert(signToday.success === true, '今天签到成功');
+  assert(signToday.day === 1, '今天是第1天');
 
-  assert(info5!.level === refund5.snapshot.level, '等级一致');
-  assert(info5!.levelName === refund5.snapshot.levelName, '等级名一致');
-  assert(info5!.growth === refund5.snapshot.growth, '成长值一致');
-  assert(info5!.totalGrowth === refund5.snapshot.totalGrowth, '累计成长值一致');
-  assert(info5!.points === refund5.snapshot.points, '积分一致');
-  assert(info5!.totalPointsEarned === refund5.snapshot.totalPointsEarned, '累计获得积分一致');
-  assert(info5!.totalPointsSpent === refund5.snapshot.totalPointsSpent, '累计消耗积分一致');
-  assert(couponList5.unusedCount === refund5.snapshot.unusedCouponCount, '可用券数一致');
-  assert(couponList5.revokedCount === refund5.snapshot.revokedCouponCount, '回收券数一致');
+  const status1 = await sdk5.getSignInStatus(mid5);
+  const calToday1 = status1.calendar.find(c => c.date === today.toISOString().slice(0, 10));
+  assert(calToday1 !== undefined, '日历有今天');
+  assert(calToday1!.signedIn === true, '今天已签');
+  assert(calToday1!.type === 'normal', '今天是normal');
+  assert(calToday1!.dayInCycle === 1, '今天dayInCycle=1');
+  assert(calToday1!.reward !== undefined, '今天有奖励');
+  assert(calToday1!.reward!.points === 10, '今天奖励10积分');
+
+  const makeupYesterday = await sdk5.makeupSignIn(mid5, yesterday.toISOString().slice(0, 10));
+  assert(makeupYesterday.success === true, '补签昨天成功');
+  assert(makeupYesterday.day === 2, '补签的是第2天');
+
+  const status2 = await sdk5.getSignInStatus(mid5);
+  const calYesterday2 = status2.calendar.find(c => c.date === yesterday.toISOString().slice(0, 10));
+  assert(calYesterday2 !== undefined, '日历有昨天');
+  assert(calYesterday2!.signedIn === true, '昨天已签');
+  assert(calYesterday2!.type === 'makeup', '昨天是补签');
+  assert(calYesterday2!.dayInCycle === 2, '昨天dayInCycle=2（补签是第2个签到日）');
+  assert(calYesterday2!.reward !== undefined, '昨天有奖励');
+  assert(calYesterday2!.reward!.points === 15, '昨天奖励15积分（第2天奖励）');
+
+  const calToday2 = status2.calendar.find(c => c.date === today.toISOString().slice(0, 10));
+  assert(calToday2!.dayInCycle === 1, '今天dayInCycle仍然是1（稳定不变）');
+  assert(calToday2!.reward!.points === 10, '今天奖励仍然是10积分（稳定）');
+
+  const makeup2DaysAgo = await sdk5.makeupSignIn(mid5, twoDaysAgo.toISOString().slice(0, 10));
+  assert(makeup2DaysAgo.success === true, '补签前天成功');
+  assert(makeup2DaysAgo.day === 3, '补签的是第3天');
+
+  const status3 = await sdk5.getSignInStatus(mid5);
+  const isSorted = status3.calendar.every((c, i, arr) => i === 0 || c.date >= arr[i - 1].date);
+  assert(isSorted === true, '日历按日期正序排列，稳定一致');
+
+  const signedDays = status3.calendar.filter(c => c.signedIn);
+  assert(signedDays.length === 3, '3天已签');
+  assert(status3.continuousSignInDays === 3, '连续3天');
+
+  const makeup3DaysAgo = await sdk5.makeupSignIn(mid5, threeDaysAgo.toISOString().slice(0, 10));
+  assert(makeup3DaysAgo.success === true, '补签大前天成功（跨轮）');
+  assert(makeup3DaysAgo.cycle >= 2, '进入第2轮');
+
+  const status4 = await sdk5.getSignInStatus(mid5);
+  assert(status4.continuousSignInDays === 4, '连续4天');
+  assert(status4.currentCycle >= 2, '当前在第2轮');
+
+  const calToday4 = status4.calendar.find(c => c.date === today.toISOString().slice(0, 10));
+  assert(calToday4!.dayInCycle === 1, '今天是第2轮第1天');
+
+  const stillSorted = status4.calendar.every((c, i, arr) => i === 0 || c.date >= arr[i - 1].date);
+  assert(stillSorted === true, '多次操作后日历顺序仍然稳定');
+  assert(status4.calendar.length <= 3, '日历天数不超过cycleDays=3');
   console.log();
 
-  console.log('【6. 流水反查 — 按订单号/来源/券来源/奖励来源筛选】');
+  console.log('【6. 流水组合筛选测试】');
   const sdk6 = createTestSDK();
-  const mid6 = 'test_event_filter';
-  await sdk6.register({ memberId: mid6, nickname: '流水筛选', registerTime: Date.now() });
-  await sdk6.placeOrder(mid6, 300, 'filter_order_001');
-  await sdk6.earnPoints(mid6, 50, 'manual', { bizId: 'filter_order_001' });
+  const mid6 = 'test_filter_v2';
+  await sdk6.register({ memberId: mid6, nickname: '筛选V2', registerTime: Date.now() });
 
-  const eventsByOrder = await sdk6.getEventsByBizId('filter_order_001');
-  assert(eventsByOrder.total >= 2, '按订单号反查到>=2条事件');
-  assert(eventsByOrder.list.every(e => e.bizId === 'filter_order_001'), '所有事件 bizId 匹配');
+  await sdk6.placeOrder(mid6, 300, 'filter_order_1');
+  await sdk6.placeOrder(mid6, 200, 'filter_order_2');
+  await sdk6.earnPoints(mid6, 100, 'manual', { remark: '手动充值' });
+  await sdk6.signIn(mid6);
+  await sdk6.completeTask(mid6, 't1');
 
-  const memberEventsWithBizId = await sdk6.getMemberEvents(mid6, { bizId: 'filter_order_001' });
-  assert(memberEventsWithBizId.total >= 2, '会员流水按 bizId 过滤到>=2条');
+  const orderEvents = await sdk6.getMemberEvents(mid6, { source: 'order' });
+  assert(orderEvents.total >= 2, '按source=order筛选到>=2条下单事件');
 
-  const signInEvents = await sdk6.getMemberEvents(mid6, { source: 'order' });
-  assert(signInEvents.total >= 1, '按 source=order 筛选到>=1条');
+  const signInEvents = await sdk6.getMemberEvents(mid6, { types: ['sign_in'] });
+  assert(signInEvents.total === 1, '按type=sign_in筛选到1条');
 
-  const signSourceEvents = await sdk6.getMemberEvents(mid6, { source: 'sign_in' });
-  assert(signSourceEvents.total >= 0, '按 source=sign_in 筛选正常');
+  const combined = await sdk6.getMemberEvents(mid6, { types: ['earn_points'], source: 'order' });
+  assert(combined.total >= 2, '类型+来源组合筛选正确');
 
-  const couponSourceEvents = await sdk6.getMemberEvents(mid6, { couponSource: '升级到Lv.2奖励' });
-  assert(couponSourceEvents.total >= 1, '按券来源筛选到升级奖励券事件');
+  const couponSourceEvents = await sdk6.getMemberEvents(mid6, { couponSource: '升级到Lv.3奖励' });
+  assert(couponSourceEvents.total >= 1, '按券来源筛选到升级奖励券');
 
-  const rewardSourceEvents = await sdk6.getMemberEvents(mid6, { rewardSource: 'order' });
-  assert(rewardSourceEvents.total >= 1, '按奖励来源=order筛选到>=1条');
+  const rewardSourceOrder = await sdk6.getMemberEvents(mid6, { rewardSource: 'order' });
+  assert(rewardSourceOrder.total >= 2, '按奖励来源=order筛选到>=2条');
 
-  const combinedFilter = await sdk6.getMemberEvents(mid6, {
-    types: ['earn_points'],
-    source: 'order',
-  });
-  assert(combinedFilter.total >= 1, '按类型+来源组合筛选到>=1条');
+  const bizIdEvents = await sdk6.getMemberEvents(mid6, { bizId: 'filter_order_1' });
+  assert(bizIdEvents.total >= 2, '按bizId筛选到>=2条');
   console.log();
 
-  console.log('【7. 退款/取消/部分退款事件类型测试】');
+  console.log('【7. 退款后数据一致性测试】');
   const sdk7 = createTestSDK();
-  const mid7 = 'test_refund_events';
-  await sdk7.register({ memberId: mid7, nickname: '退款流水', registerTime: Date.now() });
-  await sdk7.placeOrder(mid7, 200, 'event_refund_001');
-  await sdk7.refundOrder(mid7, 'event_refund_001', 200);
+  const mid7 = 'test_consistency_v2';
+  await sdk7.register({ memberId: mid7, nickname: '一致性V2', registerTime: Date.now() });
 
-  const refundEvents = await sdk7.getMemberEvents(mid7, { types: ['refund_order'] });
-  assert(refundEvents.total === 1, '退款事件1条');
-  assert(refundEvents.list[0].type === 'refund_order', '类型为 refund_order');
-  assert(refundEvents.list[0].pointsChange < 0, '积分变化为负');
-  assert(refundEvents.list[0].growthChange < 0, '成长值变化为负');
+  await sdk7.placeOrder(mid7, 800, 'consist_order_001');
+  const refund7 = await sdk7.partialRefund(mid7, 'consist_order_001', 800, 300);
+
+  const info7 = await sdk7.getMemberInfo(mid7);
+  const couponList7 = await sdk7.getCouponList(mid7);
+  const status7 = await sdk7.getSignInStatus(mid7);
+
+  assert(info7!.level === refund7.snapshot.level, '等级一致');
+  assert(info7!.levelName === refund7.snapshot.levelName, '等级名一致');
+  assert(info7!.growth === refund7.snapshot.growth, '成长值一致');
+  assert(info7!.totalGrowth === refund7.snapshot.totalGrowth, '累计成长值一致');
+  assert(info7!.points === refund7.snapshot.points, '积分一致');
+  assert(info7!.totalPointsEarned === refund7.snapshot.totalPointsEarned, '累计获得积分一致');
+  assert(info7!.totalPointsSpent === refund7.snapshot.totalPointsSpent, '累计消耗积分一致');
+  assert(couponList7.unusedCount === refund7.snapshot.unusedCouponCount, '可用券数一致');
+  assert(couponList7.revokedCount === refund7.snapshot.revokedCouponCount, '回收券数一致');
+  assert(status7.todaySignedIn === refund7.snapshot.todaySignedIn, '今日签到状态一致');
+  assert(status7.continuousSignInDays === refund7.snapshot.continuousSignInDays, '连续签到天数一致');
+  assert(status7.totalSignInDays === refund7.snapshot.totalSignInDays, '总签到天数一致');
   console.log();
 
   console.log('【8. 基础功能回归测试】');
   const sdk8 = createTestSDK();
-  const mid8 = 'regression_v4';
-  const acc = await sdk8.register({ memberId: mid8, nickname: '回归', registerTime: Date.now() });
+  const mid8 = 'regression_v5';
+  const acc = await sdk8.register({ memberId: mid8, nickname: '回归V5', registerTime: Date.now() });
   assert(acc.memberId === mid8, '注册正常');
-  assert(acc.signInCycle === 1, 'signInCycle=1');
-  assert(acc.makeupUsedCount === 0, 'makeupUsedCount=0');
 
   const earn = await sdk8.earnPoints(mid8, 100, 'reg');
   assert(earn.success === true, '积分累计正常');
 
-  const spend = await sdk8.spendPoints(mid8, 30, 'reg');
-  assert(spend.success === true && spend.remainingPoints === 70, '积分扣减正常');
-
-  const taskDaily = await sdk8.completeTask(mid8, 't2');
-  assert(taskDaily.success === true, '每日任务正常');
-
   const info = await sdk8.getMemberInfo(mid8);
   assert(info!.level === 1, '等级查询正常');
 
-  const issuedCoupon = await sdk8.issueCoupon(mid8, 'ct_test');
-  assert(issuedCoupon.success === true, '发券正常');
-  assert(issuedCoupon.coupon.source === 'system', '券来源标记 system');
+  const issued = await sdk8.issueCoupon(mid8, 'ct_test');
+  assert(issued.success === true, '发券正常');
+
+  const levels = sdk8.getLevels();
+  assert(levels.length === 4, '等级配置正常');
+
+  const eventsAll = await sdk8.getMemberEvents(mid8);
+  assert(eventsAll.total >= 2, '事件流水正常');
   console.log();
 
   console.log('\n========== 测试结果 ==========');

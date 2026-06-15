@@ -9,6 +9,8 @@ import {
   GrowthRecord,
   LevelChangeRecord,
   Coupon,
+  OrderTrail,
+  OrderSettlementRecord,
 } from '../types';
 import { generateId } from '../utils';
 
@@ -182,6 +184,93 @@ export class EventManager {
     const hasMore = startIndex + pageSize < total;
 
     return { list, total, page, pageSize, hasMore };
+  }
+
+  async getOrderTrail(memberId: string, orderId: string): Promise<OrderTrail> {
+    const eventsResult = await this.getMemberEvents(memberId, { bizId: orderId });
+    const events = eventsResult.list;
+
+    let settlementRecords: OrderSettlementRecord[] = [];
+    if (this.storage.getOrderSettlementRecords) {
+      const result = this.storage.getOrderSettlementRecords(memberId, orderId);
+      settlementRecords = result instanceof Promise ? await result : result;
+    }
+
+    let totalEarnedPoints = 0;
+    let totalRefundedPoints = 0;
+    let totalEarnedGrowth = 0;
+    let totalRefundedGrowth = 0;
+    let orderAmount = 0;
+    let refundAmountTotal = 0;
+    let levelBefore = 0;
+    let levelAfter = 0;
+    const couponsRevokedSet = new Set<string>();
+    const couponsKeptSet = new Set<string>();
+
+    for (const event of events) {
+      if (event.type === 'place_order') {
+        totalEarnedPoints += Math.max(0, event.pointsChange);
+        totalEarnedGrowth += Math.max(0, event.growthChange);
+        orderAmount = event.detail?.orderAmount || orderAmount;
+        levelBefore = event.levelBefore || levelBefore;
+        levelAfter = event.levelAfter || levelAfter;
+      } else if (event.type === 'refund_order' || event.type === 'cancel_order' || event.type === 'partial_refund') {
+        totalRefundedPoints += Math.abs(event.pointsChange);
+        totalRefundedGrowth += Math.abs(event.growthChange);
+        refundAmountTotal += event.detail?.refundAmount || 0;
+        levelAfter = event.levelAfter || levelAfter;
+        if (event.detail?.couponsRevoked) {
+          for (const cid of event.detail.couponsRevoked) {
+            couponsRevokedSet.add(cid);
+          }
+        }
+        if (event.detail?.couponsKept) {
+          for (const cid of event.detail.couponsKept) {
+            couponsKeptSet.add(cid);
+          }
+        }
+      }
+    }
+
+    if (settlementRecords.length > 0) {
+      const first = settlementRecords[settlementRecords.length - 1];
+      totalEarnedPoints = first.pointsEarned;
+      totalEarnedGrowth = first.growthEarned;
+      orderAmount = first.orderAmount;
+      levelBefore = first.levelBefore;
+      levelAfter = first.levelAfter;
+
+      totalRefundedPoints = settlementRecords.reduce((sum, r) => sum + r.pointsRefunded, 0);
+      totalRefundedGrowth = settlementRecords.reduce((sum, r) => sum + r.growthRefunded, 0);
+      refundAmountTotal = settlementRecords.reduce((sum, r) => sum + r.refundAmount, 0);
+
+      for (const r of settlementRecords) {
+        for (const cid of r.couponsRevoked) couponsRevokedSet.add(cid);
+        for (const cid of r.couponsKept) couponsKeptSet.add(cid);
+      }
+    }
+
+    return {
+      orderId,
+      orderAmount,
+      refundAmountTotal,
+      points: {
+        earned: totalEarnedPoints,
+        refunded: totalRefundedPoints,
+        remaining: Math.max(0, totalEarnedPoints - totalRefundedPoints),
+      },
+      growth: {
+        earned: totalEarnedGrowth,
+        refunded: totalRefundedGrowth,
+        remaining: Math.max(0, totalEarnedGrowth - totalRefundedGrowth),
+      },
+      events,
+      settlementRecords,
+      levelBefore,
+      levelAfter,
+      couponsRevoked: Array.from(couponsRevokedSet),
+      couponsKept: Array.from(couponsKeptSet),
+    };
   }
 
   private buildEventFromLog(
